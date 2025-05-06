@@ -1,69 +1,53 @@
-const video = document.getElementById("video");
-const preview = document.getElementById("colorPreview");
-const values = document.getElementById("colorValues");
-
 const client = new StreamerbotClient({
   host: "localhost",
   port: 8080,
   autoReconnect: true
 });
 
-const worker = new Worker("worker.js");
-let lastColor = { r: -1, g: -1, b: -1 };
+const video = document.getElementById("video");
+const preview = document.getElementById("colorPreview");
+const values = document.getElementById("colorValues");
 
-// ⚙️ Quand le worker renvoie une couleur
-worker.onmessage = (event) => {
-  const { r, g, b } = event.data;
-  preview.style.backgroundColor = `rgb(${r}, ${g}, ${b})`;
-  values.textContent = `R: ${r} G: ${g} B: ${b}`;
+const canvas = document.createElement("canvas");
+const ctx = canvas.getContext("2d", { willReadFrequently: true });
+canvas.width = 2;
+canvas.height = 2;
 
-  if (r !== lastColor.r || g !== lastColor.g || b !== lastColor.b) {
-    console.log("📡 Changement détecté → Streamer.bot :", { r, g, b });
-    client.doAction({ name: "UpdateGoveeFromCamColor" }, { r, g, b });
-    lastColor = { r, g, b };
-  }
-};
+navigator.mediaDevices.enumerateDevices().then(devices => {
+  const obsCam = devices.find(d => d.kind === "videoinput" && d.label.toLowerCase().includes("obs"));
+  const constraints = obsCam
+    ? { video: { deviceId: { exact: obsCam.deviceId } } }
+    : { video: true };
 
-// 🔍 Essaie de détecter automatiquement une caméra OBS
-function selectOBSCameraAndStart() {
-  navigator.mediaDevices.enumerateDevices()
-    .then(devices => {
-      const videoDevices = devices.filter(d => d.kind === "videoinput");
-      const obsCam = videoDevices.find(d => d.label.toLowerCase().includes("obs"));
+  return navigator.mediaDevices.getUserMedia(constraints);
+}).then(stream => {
+  video.srcObject = stream;
+  video.play();
 
-      const constraints = {
-        video: obsCam ? { deviceId: { exact: obsCam.deviceId } } : true
-      };
+  setInterval(() => {
+    if (video.readyState >= 2) {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
 
-      return navigator.mediaDevices.getUserMedia(constraints);
-    })
-    .then(stream => {
-      video.srcObject = stream;
-      video.play();
-
-      const canvas = new OffscreenCanvas(2, 2);
-      const ctx = canvas.getContext("2d");
-
-      function captureLoop() {
-        if (video.readyState >= 2) {
-          try {
-            ctx.drawImage(video, 0, 0, 2, 2);
-            const imgData = ctx.getImageData(0, 0, 2, 2);
-            worker.postMessage(imgData);
-          } catch (err) {
-            console.error("Erreur lecture image :", err);
-          }
-        }
-        requestAnimationFrame(captureLoop);
+      let r = 0, g = 0, b = 0;
+      for (let i = 0; i < imgData.length; i += 4) {
+        r += imgData[i];
+        g += imgData[i + 1];
+        b += imgData[i + 2];
       }
 
-      requestAnimationFrame(captureLoop);
-    })
-    .catch(err => {
-      console.error("Erreur caméra :", err);
-      alert("⚠️ Accès à la caméra refusé ou OBS non détecté.");
-    });
-}
+      const pixelCount = imgData.length / 4;
+      r = Math.round(r / pixelCount);
+      g = Math.round(g / pixelCount);
+      b = Math.round(b / pixelCount);
 
-// 🔁 Lancement
-selectOBSCameraAndStart();
+      preview.style.backgroundColor = `rgb(${r}, ${g}, ${b})`;
+      values.textContent = `R: ${r} G: ${g} B: ${b}`;
+
+      client.doAction({ name: "UpdateGoveeFromCamColor" }, { r, g, b });
+    }
+  }, 300);
+}).catch(err => {
+  console.error("Erreur d’accès à la caméra :", err);
+  values.textContent = "⚠️ Caméra non détectée";
+});
