@@ -1,4 +1,4 @@
-import { StreamerbotClient } from "https://unpkg.com/@streamerbot/client/dist/streamerbot-client.mjs";
+//import { StreamerbotClient } from "https://unpkg.com/@streamerbot/client/dist/streamerbot-client.mjs";
 
 const video = document.getElementById("video");
 const preview = document.getElementById("colorPreview");
