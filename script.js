@@ -13,47 +13,61 @@ const client = new StreamerbotClient({
 const worker = new Worker("worker.js");
 let lastColor = { r: -1, g: -1, b: -1 };
 
-worker.onmessage = (event) => {
-  const { r, g, b } = event.data;
+// ⬇️ Fonction principale pour détecter la bonne caméra OBS
+async function setupCamera() {
+  try {
+    // Étape 1 : forcer un accès général pour débloquer les labels
+    const tempStream = await navigator.mediaDevices.getUserMedia({ video: true });
+    tempStream.getTracks().forEach(track => track.stop()); // On ferme ce flux
 
-  const delta =
-    Math.abs(r - lastColor.r) +
-    Math.abs(g - lastColor.g) +
-    Math.abs(b - lastColor.b);
+    // Étape 2 : détecter la caméra OBS dans la liste
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const obsCam = devices.find(d =>
+      d.kind === "videoinput" && d.label.toLowerCase().includes("obs")
+    );
 
-  if (delta > 4) {
-    lastColor = { r, g, b };
+    if (!obsCam) throw new Error("Caméra OBS non détectée");
 
-    preview.style.backgroundColor = `rgb(${r}, ${g}, ${b})`;
-    values.textContent = `R: ${r} G: ${g} B: ${b}`;
-
-    client.doAction({ name: "UpdateGoveeFromCamColor" }, { r, g, b });
-  }
-};
-
-navigator.mediaDevices.enumerateDevices()
-  .then(devices => {
-    const cam = devices.find(d => d.kind === "videoinput" && d.label.toLowerCase().includes("obs"));
-    if (!cam) throw new Error("OBS Virtual Cam non trouvée");
-    return navigator.mediaDevices.getUserMedia({
-      video: { deviceId: { exact: cam.deviceId } }
+    // Étape 3 : ouvrir un flux uniquement sur OBS
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { deviceId: { exact: obsCam.deviceId } }
     });
-  })
-  .then(stream => {
-    video.srcObject = stream;
 
+    video.srcObject = stream;
+    video.play();
+
+    // Utilise OffscreenCanvas pour la performance
     const canvas = new OffscreenCanvas(2, 2);
     const ctx = canvas.getContext("2d");
 
-    setInterval(() => {
+    function loop() {
       if (video.readyState >= 2) {
         ctx.drawImage(video, 0, 0, 2, 2);
         const img = ctx.getImageData(0, 0, 2, 2);
         worker.postMessage(img);
       }
-    }, 200); // ~5 FPS
-  })
-  .catch(err => {
-    console.error("Caméra non détectée :", err);
+      requestAnimationFrame(loop);
+    }
+
+    loop();
+  } catch (err) {
+    console.error("Erreur d’accès caméra :", err);
     values.textContent = "⚠️ Caméra non détectée";
-  });
+  }
+}
+
+// Réception des couleurs traitées depuis le worker
+worker.onmessage = (event) => {
+  const { r, g, b } = event.data;
+
+  preview.style.backgroundColor = `rgb(${r}, ${g}, ${b})`;
+  values.textContent = `R: ${r} G: ${g} B: ${b}`;
+
+  if (r !== lastColor.r || g !== lastColor.g || b !== lastColor.b) {
+    client.doAction({ name: "UpdateGoveeFromCamColor" }, { r, g, b });
+    lastColor = { r, g, b };
+  }
+};
+
+// Lance la capture
+setupCamera();
